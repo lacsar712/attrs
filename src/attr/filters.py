@@ -69,4 +69,8 @@ def exclude(*what):
             or attribute in attrs
         )
 
+    # Marker so the thread-local export policy can tell exclude-style
+    # filters apart from arbitrary user callables.
+    exclude_.__attrs_exclude_filter__ = True
+
     return exclude_

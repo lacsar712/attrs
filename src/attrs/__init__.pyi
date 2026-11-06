@@ -42,6 +42,15 @@ from attr import validate as validate
 from attr import validators as validators
 from attr import attrib, asdict as asdict, astuple as astuple
 from attr import NothingType as NothingType
+from attr import AssocSurface as AssocSurface
+from attr import EffectivePolicy as EffectivePolicy
+from attr import EvolveSurface as EvolveSurface
+from attr import ExportSurface as ExportSurface
+from attr import SetattrPipeline as SetattrPipeline
+from attr import current_policy as current_policy
+from attr import policy_frame as policy_frame
+from attr import pop_policy as pop_policy
+from attr import push_policy as push_policy
 
 if sys.version_info >= (3, 11):
     from typing import dataclass_transform

@@ -28,6 +28,17 @@ from ._make import (
     validate,
 )
 from ._next_gen import define, field, frozen, mutable
+from ._policy import (
+    AssocSurface,
+    EffectivePolicy,
+    EvolveSurface,
+    ExportSurface,
+    SetattrPipeline,
+    current_policy,
+    policy_frame,
+    pop_policy,
+    push_policy,
+)
 from ._version_info import VersionInfo
 
 
@@ -44,11 +55,16 @@ NothingType = Literal[_Nothing.NOTHING]
 
 __all__ = [
     "NOTHING",
+    "AssocSurface",
     "Attribute",
     "AttrsInstance",
     "Converter",
+    "EffectivePolicy",
+    "EvolveSurface",
+    "ExportSurface",
     "Factory",
     "NothingType",
+    "SetattrPipeline",
     "asdict",
     "assoc",
     "astuple",
@@ -58,6 +74,7 @@ __all__ = [
     "attrs",
     "cmp_using",
     "converters",
+    "current_policy",
     "define",
     "evolve",
     "exceptions",
@@ -71,6 +88,9 @@ __all__ = [
     "ib",
     "make_class",
     "mutable",
+    "policy_frame",
+    "pop_policy",
+    "push_policy",
     "resolve_types",
     "s",
     "set_run_validators",

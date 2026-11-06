@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 
 
+from . import _policy
 from ._compat import get_generic_base
-from ._make import _OBJ_SETATTR, NOTHING, fields
-from .exceptions import AttrsAttributeNotFoundError
+from ._make import _OBJ_SETATTR, NOTHING, _reinit_instance, fields
+from .exceptions import AttrsAttributeNotFoundError, PolicyStackError
 
 
 _ATOMIC_TYPES = frozenset(
@@ -75,6 +76,13 @@ def asdict(
     ..  versionadded:: 21.3.0
         If a dict has a collection for a key, it is serialized as a tuple.
     """
+    # Merge the current thread's export policy frame with the caller's
+    # filter / retain_collection_types arguments.  Recursive calls below
+    # resolve again against the then-current frame.
+    policy_frame, filter, retain_collection_types = (
+        _policy.resolve_export_arguments(filter, retain_collection_types)
+    )
+
     attrs = fields(inst.__class__)
     rv = dict_factory()
     for a in attrs:
@@ -146,6 +154,10 @@ def asdict(
                 rv[a.name] = v
         else:
             rv[a.name] = v
+
+    # Reject if an unbalanced frame was pushed while fields were iterated
+    # (for example from inside a filter), instead of keeping the entry view.
+    _policy._ensure_unchanged(policy_frame, "asdict")
     return rv
 
 
@@ -269,6 +281,12 @@ def astuple(
 
     ..  versionadded:: 16.2.0
     """
+    # Merge the current thread's export policy frame with the caller's
+    # filter / retain_collection_types arguments.
+    policy_frame, filter, retain_collection_types = (
+        _policy.resolve_export_arguments(filter, retain_collection_types)
+    )
+
     attrs = fields(inst.__class__)
     rv = []
     retain = retain_collection_types  # Very long. :/
@@ -346,6 +364,9 @@ def astuple(
         else:
             rv.append(v)
 
+    # Reject if the export frame changed while fields were being traversed.
+    _policy._ensure_unchanged(policy_frame, "astuple")
+
     return rv if tuple_factory is list else tuple_factory(rv)
 
 
@@ -409,6 +430,31 @@ def assoc(inst, **changes):
         removed du to the slightly different approach compared to
         `attrs.evolve`, though.
     """
+    # Read the thread-local assoc surface at the exit.  It is independent of
+    # the evolve surface and must never be collapsed into the same flag.
+    policy_frame = _policy._top()
+    surface = (
+        _policy.AssocSurface.HONOR_ASSOC
+        if policy_frame is None
+        else policy_frame.assoc_surface
+    )
+
+    if surface is _policy.AssocSurface.DENY_ASSOC:
+        msg = (
+            "assoc() is denied by a policy frame pushed on the current "
+            "thread; no new instance was created."
+        )
+        raise PolicyStackError(msg)
+
+    if surface is _policy.AssocSurface.FORCE_REINIT:
+        # Same re-flight semantics as evolve(honor_reinit): converters and
+        # validators run again through the class constructor.  This is a
+        # separate assoc_surface decision -- assoc does not silently call
+        # evolve.
+        new = _reinit_instance(inst, changes)
+        _policy._ensure_unchanged(policy_frame, "assoc")
+        return new
+
     import copy
 
     new = copy.copy(inst)
@@ -419,6 +465,10 @@ def assoc(inst, **changes):
             msg = f"{k} is not an attrs attribute on {new.__class__}."
             raise AttrsAttributeNotFoundError(msg)
         _OBJ_SETATTR(new, k, v)
+
+    # The copy may have run user code (__copy__); reject if the frame
+    # changed while this exit was in flight.
+    _policy._ensure_unchanged(policy_frame, "assoc")
     return new
 
 

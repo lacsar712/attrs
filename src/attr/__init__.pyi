@@ -4,9 +4,11 @@ import sys
 from typing import (
     Any,
     Callable,
+    ContextManager,
     Generic,
     Literal,
     Mapping,
+    NamedTuple,
     Protocol,
     Sequence,
     TypeVar,
@@ -379,6 +381,52 @@ def astuple(
 def has(cls: type) -> TypeGuard[type[AttrsInstance]]: ...
 def assoc(inst: _T, **changes: Any) -> _T: ...
 def evolve(inst: _T, **changes: Any) -> _T: ...
+
+# thread-local setattr / evolve / assoc / export policy stacks --
+
+class SetattrPipeline(enum.Enum):
+    HONOR_HOOKS = "honor_hooks"
+    BARE_WRITE = "bare_write"
+    CONVERT_ONLY = "convert_only"
+    VALIDATE_ONLY = "validate_only"
+
+class EvolveSurface(enum.Enum):
+    HONOR_REINIT = "honor_reinit"
+    DENY_EVOLVE = "deny_evolve"
+    PATCH_SETATTR = "patch_setattr"
+
+class AssocSurface(enum.Enum):
+    HONOR_ASSOC = "honor_assoc"
+    DENY_ASSOC = "deny_assoc"
+    FORCE_REINIT = "force_reinit"
+
+class ExportSurface(enum.Enum):
+    HONOR_FILTER = "honor_filter"
+    FORCE_INCLUDE = "force_include"
+    DROP_COLLECTIONS_TO_BUILTIN = "drop_collections_to_builtin"
+
+class EffectivePolicy(NamedTuple):
+    setattr_pipeline: SetattrPipeline
+    evolve_surface: EvolveSurface
+    assoc_surface: AssocSurface
+    export_surface: ExportSurface
+
+def push_policy(
+    *,
+    setattr_pipeline: SetattrPipeline | None = ...,
+    evolve_surface: EvolveSurface | None = ...,
+    assoc_surface: AssocSurface | None = ...,
+    export_surface: ExportSurface | None = ...,
+) -> Any: ...
+def pop_policy(token: Any | None = ...) -> None: ...
+def policy_frame(
+    *,
+    setattr_pipeline: SetattrPipeline | None = ...,
+    evolve_surface: EvolveSurface | None = ...,
+    assoc_surface: AssocSurface | None = ...,
+    export_surface: ExportSurface | None = ...,
+) -> ContextManager[EffectivePolicy]: ...
+def current_policy() -> EffectivePolicy: ...
 
 # _config --
 

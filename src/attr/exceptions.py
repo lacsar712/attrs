@@ -78,6 +78,22 @@ class PythonTooOldError(RuntimeError):
     """
 
 
+class PolicyStackError(RuntimeError):
+    """
+    A thread-local policy stack was misused.
+
+    This is raised in two situations:
+
+    - A policy frame was pushed or popped incorrectly (for example
+      :func:`attrs.pop_policy` was called on an empty stack or with a token
+      that is not the current top frame).
+    - An exit (``__setattr__``, ``evolve``/``__replace__``, ``assoc``,
+      ``asdict``/``astuple``) detected that its policy frame changed while
+      the exit was already running.  Rather than silently keeping a stale
+      snapshot, the in-flight operation is rejected.
+    """
+
+
 class NotCallableError(TypeError):
     """
     A field requiring a callable has been set with a value that is not

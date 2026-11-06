@@ -18,7 +18,7 @@ from typing import Any, NamedTuple, TypeVar
 
 # We need to import _compat itself in addition to the _compat members to avoid
 # having the thread-local in the globals here.
-from . import _compat, _config, setters
+from . import _compat, _config, _policy, setters
 from ._compat import (
     PY_3_11_PLUS,
     PY_3_13_PLUS,
@@ -31,6 +31,7 @@ from .exceptions import (
     DefaultAlreadySetError,
     FrozenInstanceError,
     NotAnAttrsClassError,
+    PolicyStackError,
     UnannotatedAttributeError,
 )
 
@@ -631,9 +632,41 @@ def evolve(*args, **changes):
         )
         raise TypeError(msg) from None
 
+    # Read the thread-local evolve surface at the exit, never from a cached
+    # class-level setting.
+    policy_frame = _policy._top()
+    surface = (
+        _policy.EvolveSurface.HONOR_REINIT
+        if policy_frame is None
+        else policy_frame.evolve_surface
+    )
+
+    if surface is _policy.EvolveSurface.DENY_EVOLVE:
+        msg = (
+            "evolve() is denied by a policy frame pushed on the current "
+            "thread; no new instance was created."
+        )
+        raise PolicyStackError(msg)
+
+    if surface is _policy.EvolveSurface.PATCH_SETATTR:
+        return _evolve_via_patch(inst, changes, policy_frame)
+
+    new = _reinit_instance(inst, changes)
+    # If a converter / factory / __attrs_post_init__ pushed an unbalanced
+    # frame while the constructor was already running, reject instead of
+    # returning an instance built under a changed policy.
+    _policy._ensure_unchanged(policy_frame, "evolve")
+    return new
+
+
+def _reinit_instance(inst, changes):
+    """
+    Build a replacement through the class constructor, filling in current
+    values for every init field that was not changed.  This is the re-flight
+    semantics shared by evolve() and by assoc()'s ``force_reinit`` surface.
+    """
     cls = inst.__class__
-    attrs = fields(cls)
-    for a in attrs:
+    for a in fields(cls):
         if not a.init:
             continue
         attr_name = a.name  # To deal with private attributes.
@@ -642,6 +675,29 @@ def evolve(*args, **changes):
             changes[init_name] = getattr(inst, attr_name)
 
     return cls(**changes)
+
+
+def _evolve_via_patch(inst, changes, policy_frame):
+    """
+    Patch-style evolve: shallow-copy *inst* and write changed fields through
+    the class's assignment pipeline instead of re-flying the constructor.
+    Converters and validators of unchanged fields therefore do not run again.
+    """
+    import copy
+
+    new = copy.copy(inst)
+    by_alias = {a.alias: a for a in fields(inst.__class__)}
+    for key, value in changes.items():
+        a = by_alias.get(key)
+        if a is None:
+            msg = f"evolve() got an unexpected keyword argument {key!r}."
+            raise TypeError(msg)
+        # Goes through the generated __setattr__ (if any), which itself reads
+        # the thread-local setattr pipeline.
+        setattr(new, a.name, value)
+
+    _policy._ensure_unchanged(policy_frame, "evolve")
+    return new
 
 
 class _ClassBuilder:
@@ -1193,29 +1249,18 @@ class _ClassBuilder:
         # docstring comes from _add_method_dunders
         def __setattr__(self, name, val):
             try:
-                a, hook, is_gen = sa_attrs[name]
+                entry = sa_attrs[name]
             except KeyError:
                 _OBJ_SETATTR(self, name, val)
 
                 return
 
-            if is_gen():
-                gen = hook(self, a, val)
-                nval = next(gen)
-                _OBJ_SETATTR(self, name, nval)
-                try:
-                    next(gen)
-                except StopIteration:
-                    return
-
-                gen.close()
-                msg = "Generator on_setattr hook yielded more than once."
-                raise RuntimeError(msg)
-
-            nval = hook(self, a, val)
-            _OBJ_SETATTR(self, name, nval)
-
-            return
+            # Honors the thread-local setattr policy stack (bare writes,
+            # convert-only / validate-only frames) while keeping the empty
+            # stack identical to the permanent on_setattr pipeline. Works for
+            # both slotted and non-slotted classes since every write goes
+            # through object.__setattr__ internally.
+            _policy.dispatch_generated_setattr(self, name, val, entry)
 
         self._cls_dict["__attrs_own_setattr__"] = True
         self._cls_dict["__setattr__"] = self._add_method_dunders(__setattr__)
